@@ -8,6 +8,12 @@ import requests
 from PyQt5.QtWidgets import (QApplication, QWidget, QLabel, QVBoxLayout, QHBoxLayout, QFrame, QMessageBox, QTextEdit, QSizePolicy, QPushButton, QScrollArea)
 from PyQt5.QtGui import QFont, QIcon, QCursor, QPixmap, QColor
 from PyQt5.QtCore import Qt, QSize
+import logging
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 class TweetFrame(QFrame):
     def __init__(self, text, is_original=False, parent=None):
@@ -123,29 +129,49 @@ class TweetResponder(QWidget):
 
     def use_reply(self, suggestion):
         try:
-            # Find all reply buttons
-            reply_buttons = self.page.query_selector_all('button[data-testid="reply"]')
+            logger.info("Starting reply process")
 
-            if len(reply_buttons) < 2:
-                raise Exception("Couldn't find the reply button for the comment")
+            # Wait for the page to load completely
+            # self.page.wait_for_load_state('networkidle')
 
-            # Click the second reply button (first one is for the original tweet, second is for the comment)
-            reply_buttons[1].click()
+            # Find all tweet articles
+            tweet_articles = self.page.query_selector_all('article[data-testid="tweet"]')
 
-            # Wait for the reply text box to appear and type the suggestion
-            self.page.wait_for_selector('div[data-testid="tweetTextarea_0"]')
+            if len(tweet_articles) < 2:
+                raise Exception("Couldn't find the comment to reply to")
 
-            # Use the correct selector to fill in the suggestion
-            textarea_selector = 'div[data-testid="tweetTextarea_0"] div[contenteditable="true"]'
-            self.page.wait_for_selector(textarea_selector)
-            self.page.fill(textarea_selector, suggestion)
+            # Select the second tweet article (the comment)
+            comment_article = tweet_articles[1]
 
-            # Click the Reply button
-            self.page.click('div[data-testid="tweetButtonInline"]')
+            # Click on the comment to focus it
+            comment_article.click()
+            logger.info("Clicked on the comment")
+
+            # Wait for the reply input to appear
+            reply_input_selector = 'div[data-testid="tweetTextarea_0"]'
+            self.page.wait_for_selector(reply_input_selector, state="visible", timeout=5000)
+            logger.info("Reply input is visible")
+
+            # Fill in the reply
+            self.page.fill(reply_input_selector, suggestion)
+            logger.info("Filled in the reply")
+
+            # Find and click the Reply button
+            reply_button_selector = 'button[data-testid="tweetButtonInline"]'
+            self.page.wait_for_selector(reply_button_selector, state="visible", timeout=5000)
+            self.page.click(reply_button_selector)
+            logger.info("Clicked the Reply button")
+
+            # Wait for the reply to be posted
+            self.page.wait_for_timeout(2000)
 
             QMessageBox.information(self, "Reply Sent", "Your reply has been posted successfully!")
             self.close()
+        except PlaywrightTimeoutError as e:
+            logger.error(f"Timeout error: {str(e)}")
+            QMessageBox.critical(self, "Error", f"Timeout error: {str(e)}")
         except Exception as e:
+            logger.error(f"Failed to post reply: {str(e)}")
             QMessageBox.critical(self, "Error", f"Failed to post reply: {str(e)}")
 
     def no_response(self):
@@ -193,6 +219,12 @@ def generate_claude_replies(prompt):
     except Exception as e:
         print(f"An unexpected error occurred: {e}")
         return []
+
+
+
+# Replace these with your own X credentials
+USERNAME = ''
+PASSWORD = ''
 
 def login_x(page):
     print("Navigating to login page...")
@@ -296,7 +328,7 @@ def main():
                 print(f"Original tweet: {original_post}")
                 print(f"Reply: {reply}")
 
-                prompt = f"Original Tweet: {original_post}\nDraft a polite and engaging unique and clever response."
+                prompt = f"Original Tweet: {original_post}\n Response Tweet: {reply}\nDraft a witty and engaging unique response to the response tweet. Show a bit of personality, but don't be overly formal or stiff. Keep it real. Don't be too enthusiastic or too negative. Just be chill and friendly. Do not say anything other than the 3 responses. No numbers, no heading intro, just the responses and nothing else."
                 suggestions = generate_claude_replies(prompt)
                 print("Generated suggestions:", suggestions)
 
